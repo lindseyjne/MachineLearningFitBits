@@ -1,0 +1,148 @@
+---
+title: "Predicting Exercise Using Machine Learning"
+author: "Lindsey Erickson"
+date: "June 13, 2017"
+output: html_document
+---
+
+
+## Introduction
+
+A large number of data about personal activity is collected via *Jawbone Up*, *Nike FuelBand*, and *Fitbit*.  These devices quantify how much of a particular activey one does, but rarely quantify how well they do it.  
+
+This project will be to use data from accelerometers on the belt, forearm, arm, and dumbell of six participants.  The participants were asked to perform barbell lifts correctly and incorrectly in five different ways.  The goal is to predict the manner in which the participants did the exercise.
+
+##Load Libraries and Data
+```{r, echo = TRUE, warning = FALSE, message = FALSE, collapse = TRUE}
+library(class)
+library(rpart)
+library(dplyr)
+library(rpart.plot)
+library(RColorBrewer)
+library(randomForest)
+library(caret)
+library(ggplot2)
+library("PerformanceAnalytics")
+
+setwd('D:/Fitbit')
+
+#load the data
+dataTrain <- read.csv("pml-training.csv")
+dataTest <- read.csv("pml-testing.csv")
+
+dim(dataTrain)  #dimension of the train data
+dim(dataTest)   #dimension of the test data
+
+```
+
+## Clean the data
+The above output shows that there are 160 variables in the dataset.  However, looking at the .csv file, there are many variables with *NA* and missing data.  My next step is to clean the data to include only relevent variables. 
+
+```{r, echo = TRUE, warning = FALSE, message = FALSE, collapse = TRUE}
+#subset variables that do not include NAs
+dataTrain <- dataTrain[, colSums(is.na(dataTrain)) == 0]
+dataTest <- dataTest[, colSums(is.na(dataTest)) == 0]
+
+#eliminate variables that have mostly missing data
+dataTrain1 <- dataTrain %>% select(-starts_with("kurtosis"), -starts_with("skewness"), -starts_with("max"), 
+                                   -starts_with("min"), -starts_with("amplitude"), -starts_with("X"), 
+                                   -starts_with("user"), -starts_with("cvtd_time"))
+
+dataTest1 <- dataTest %>% select(-starts_with("kurtosis"), -starts_with("skewness"), -starts_with("max"), 
+                                 -starts_with("min"), -starts_with("amplitude"), -starts_with("X"), 
+                                 -starts_with("user"), -starts_with("cvtd_time"),
+                                 -starts_with("problem"))
+
+levels(dataTest1$new_window) <- levels(dataTrain1$new_window)
+
+dim(dataTrain1)
+dim(dataTest1)
+
+```
+The above output shows that after cleaning, we end up with 57 variables, instead of 160 variables.
+
+## Basic Exploratory Analsyis on Variable Classe
+I want to look at some basic attributes of the *classe* variable to get a sense of the variable I want to predict.
+```{r, echo = TRUE, warning = FALSE, message = FALSE, collapse = TRUE}
+barplot(prop.table(table(dataTrain1$classe)), col = "hot pink", xlab = "Class", ylab = "Frequency")
+prop.table(table(dataTrain1$classe)) 
+```
+The barchart shows that *Class A* has the highest frequency, at 28.4%, while *Class D* has the lowest frequency at 16.4%.
+
+## Building the Model - Decision Tree
+The first model I'm going to build is a decision tree.  To use cross-validation, I'll create a loop that will resample the test and train data and calculate the accuracy of the model.  I'll take the mean of the accuracies calculated as the accuracy of the model.
+```{r, echo = TRUE, warning = FALSE, message = FALSE, collapse = TRUE}
+# Initialize the accs vector cross-validation for splitting the data
+set.seed(199)
+n <- nrow(dataTrain1)
+shuffled <- dataTrain1[sample(n),]
+accs <- rep(0,6)
+
+for (i in 1:6) {
+  # These indices indicate the interval of the test set
+  indices <- (((i-1) * round((1/6)*nrow(shuffled))) + 1):((i*round((1/6) * nrow(shuffled))))
+  
+  # Exclude them from the train set
+  train <- shuffled[-indices,]
+  
+  # Include them in the test set
+  test <- shuffled[indices,]
+  
+  # A model is learned using each training set
+  tree <- rpart(classe ~ ., train, method = "class")
+  
+  # Make a prediction on the test set using tree
+  pred <- predict(tree, test, type = "class")
+  
+  # Assign the confusion matrix to conf
+  conf <- table(test$classe, pred)
+  
+  # Assign the accuracy of this model to the ith index in accs
+  accs[i] <- sum(diag(conf))/sum(conf)
+}
+
+# Print out the mean of accs
+mean(accs)
+conf
+
+```
+This approach of building a decision tree using cross-validation, produced an accuracy of 82.8%, which means the out-of-sample error is 17.2%, which is not good.  The table shows how bad the prediction is on the test data.  Therefore, I'm going to build another model.
+
+## Building Another Model - Random Forest
+Due to the low accuracy of the previous model, I'm going to build a random forest, as random forests are stronger learners than decision trees.  According to Trevor Hastie, "Random Forests provide free cross-validation".  So I'll build without having to do extra coding for cross-validation.
+```{r, echo = TRUE, warning = FALSE, message = FALSE, collapse = TRUE}
+set.seed(199)
+# Random forest model is learned
+randForest <- randomForest(classe ~ ., ntree = 50, data = train)
+
+# Make a prediction on the test set using the random forest model
+predForest <- predict(randForest, test)
+
+# Assign the confusion matrix to confFores
+confForest <- table(test$classe, predForest)
+
+# Assign the accuracy of this model to accForest
+accForest <- sum(diag(confForest)) / sum(confForest)
+
+# Output the above results
+accForest
+confForest
+```
+This approach of building a Random Forest produced an accuracy of >99%, which means the out-of-sample error is <1%.  I'm very happy with this model.  The table shows how well the prediction is on the test data.  We'll use this model to predict the test data set that was loaded in the first part of this project.
+
+
+## Predicting the Test dataset
+Now that we have our model (Random Forest), I need to predict the 10 observations in the test dataset.
+```{r, echo = TRUE, warning = FALSE, message = FALSE, collapse = TRUE}
+FinalPredictions <- predict(randForest, dataTest1)
+FinalPredictions
+```
+I'd like to think that the above prediction's accuracy is >99%
+
+## Appendix
+Here's the decision tree model that I built (model 1).  However, it is quit messy.  I did attempt to prune the tree; however, the accuracy remained the same (approx 82%)
+```{r, echo = TRUE, warning = FALSE, message = FALSE, collapse = TRUE}
+# Plot the tree 
+plot(tree, uniform = TRUE)
+text(tree, use.n = TRUE, cex = 0.7)
+```
